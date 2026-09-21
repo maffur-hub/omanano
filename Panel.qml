@@ -30,6 +30,8 @@ Item {
   property string pendingSelectId: ""
   property string pendingReadId: ""
   property string loadedNoteId: ""
+  property int loadedModified: 0
+  property string listSignature: ""
   property bool editorTooLarge: false
   property int maxNoteBytes: 1024 * 1024
 
@@ -219,6 +221,7 @@ Item {
     editorDirty = false
     loadedNoteId = ""
     editorTooLarge = false
+    loadedModified = 0
     editorLoading = false
     if (!selectedNote) return
     if (selectedNote.tooLarge) {
@@ -239,6 +242,7 @@ Item {
     }
     readProcess.requestedId = pendingReadId
     readProcess.requestedTrashed = !!note.trashed
+    readProcess.requestedModified = Number(note.modified || 0)
     pendingReadId = ""
     readProcess.outputText = ""
     var command = [storePath, "read", readProcess.requestedId]
@@ -292,6 +296,7 @@ Item {
     saveTimer.stop()
     suppressFileChange = true
     noteFile.setText(editor.text)
+    loadedModified = Date.now()
     updateNoteInMemory(selectedId, editor.text)
     editorDirty = false
     statusText = "Saved"
@@ -430,10 +435,20 @@ Item {
       }
       try {
         var result = JSON.parse(listProcess.outputText || "{}")
+        var incomingNotes = Array.isArray(result.notes) ? result.notes : []
+        var signature = ""
+        for (var i = 0; i < incomingNotes.length; i++) {
+          var item = incomingNotes[i]
+          signature += item.id + ":" + item.modified + ":" + item.trashed + ":" + item.pinned + "|"
+        }
+        var listChanged = signature !== root.listSignature
+        if (listChanged) {
+          root.listSignature = signature
+          root.notes = incomingNotes
+          root.folders = Array.isArray(result.folders) ? result.folders : []
+          root.maxNoteBytes = Math.max(1, Number(result.maxNoteBytes || root.maxNoteBytes))
+        }
         var previousId = root.selectedId
-        root.notes = Array.isArray(result.notes) ? result.notes : []
-        root.folders = Array.isArray(result.folders) ? result.folders : []
-        root.maxNoteBytes = Math.max(1, Number(result.maxNoteBytes || root.maxNoteBytes))
         var wanted = root.pendingSelectId
         root.pendingSelectId = ""
         if (wanted && wanted !== "@result") root.selectedId = wanted
@@ -441,9 +456,18 @@ Item {
           var entries = root.filteredNotes()
           root.selectedId = entries.length ? String(entries[0].id) : ""
         }
-        if (root.selectedId !== previousId || !editor.activeFocus || !root.selectedNote) root.loadEditor()
-        var visibleCount = root.notes.filter(function(note) { return !note.trashed }).length
-        root.statusText = visibleCount + " notes" + (result.notesTruncated || result.foldersTruncated ? " · Library limit reached" : "")
+        var reloadEditor = root.selectedId !== previousId
+        if (!reloadEditor && root.selectedNote && !readProcess.running) {
+          var note = root.selectedNote
+          if (note.tooLarge !== root.editorTooLarge) reloadEditor = true
+          else if (!note.tooLarge && root.loadedNoteId === root.selectedId
+                   && Math.abs(Number(note.modified || 0) - root.loadedModified) > 100) reloadEditor = true
+        }
+        if (reloadEditor) root.loadEditor()
+        if (listChanged) {
+          var visibleCount = root.notes.filter(function(note) { return !note.trashed }).length
+          root.statusText = visibleCount + " notes" + (result.notesTruncated || result.foldersTruncated ? " · Library limit reached" : "")
+        }
       } catch (error) {
         root.statusText = "Could not read the notes index"
       }
@@ -454,6 +478,7 @@ Item {
     id: readProcess
     property string requestedId: ""
     property bool requestedTrashed: false
+    property int requestedModified: 0
     property string outputText: ""
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: readProcess.outputText = String(text || "").trim() }
     stderr: StdioCollector {
@@ -472,6 +497,7 @@ Item {
             root.editorLoading = true
             root.editorTooLarge = !!result.tooLarge
             root.loadedNoteId = result.tooLarge ? "" : requestedId
+            root.loadedModified = result.tooLarge ? 0 : readProcess.requestedModified
             editor.text = result.tooLarge ? "" : String(result.content || "")
             editor.cursorPosition = 0
             root.editorDirty = false
