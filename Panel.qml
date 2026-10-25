@@ -29,6 +29,7 @@ Item {
   property string pendingAction: ""
   property string pendingSelectId: ""
   property string pendingReadId: ""
+  property bool pendingReadKeep: false
   property string loadedNoteId: ""
   property int loadedModified: 0
   property string listSignature: ""
@@ -214,12 +215,14 @@ Item {
     loadEditor()
   }
 
-  function loadEditor() {
+  function loadEditor(keepText) {
     editorLoading = true
-    editor.text = ""
-    editor.cursorPosition = 0
+    if (!keepText) {
+      editor.text = ""
+      editor.cursorPosition = 0
+      loadedNoteId = ""
+    }
     editorDirty = false
-    loadedNoteId = ""
     editorTooLarge = false
     loadedModified = 0
     editorLoading = false
@@ -230,6 +233,7 @@ Item {
       return
     }
     pendingReadId = selectedId
+    pendingReadKeep = !!keepText
     startPendingRead()
   }
 
@@ -243,6 +247,8 @@ Item {
     readProcess.requestedId = pendingReadId
     readProcess.requestedTrashed = !!note.trashed
     readProcess.requestedModified = Number(note.modified || 0)
+    readProcess.requestedKeep = root.pendingReadKeep
+    pendingReadKeep = false
     pendingReadId = ""
     readProcess.outputText = ""
     var command = [storePath, "read", readProcess.requestedId]
@@ -456,14 +462,15 @@ Item {
           var entries = root.filteredNotes()
           root.selectedId = entries.length ? String(entries[0].id) : ""
         }
-        var reloadEditor = root.selectedId !== previousId
+        var noteChanged = root.selectedId !== previousId
+        var reloadEditor = noteChanged
         if (!reloadEditor && root.selectedNote && !readProcess.running) {
           var note = root.selectedNote
           if (note.tooLarge !== root.editorTooLarge) reloadEditor = true
           else if (!note.tooLarge && root.loadedNoteId === root.selectedId
                    && Math.abs(Number(note.modified || 0) - root.loadedModified) > 100) reloadEditor = true
         }
-        if (reloadEditor) root.loadEditor()
+        if (reloadEditor) root.loadEditor(!noteChanged)
         if (listChanged) {
           var visibleCount = root.notes.filter(function(note) { return !note.trashed }).length
           root.statusText = visibleCount + " notes" + (result.notesTruncated || result.foldersTruncated ? " · Library limit reached" : "")
@@ -479,6 +486,7 @@ Item {
     property string requestedId: ""
     property bool requestedTrashed: false
     property int requestedModified: 0
+    property bool requestedKeep: false
     property string outputText: ""
     stdout: StdioCollector { waitForEnd: true; onStreamFinished: readProcess.outputText = String(text || "").trim() }
     stderr: StdioCollector {
@@ -499,7 +507,7 @@ Item {
             root.loadedNoteId = result.tooLarge ? "" : requestedId
             root.loadedModified = result.tooLarge ? 0 : readProcess.requestedModified
             editor.text = result.tooLarge ? "" : String(result.content || "")
-            editor.cursorPosition = 0
+            if (!readProcess.requestedKeep) editor.cursorPosition = 0
             root.editorDirty = false
             root.editorLoading = false
             root.statusText = result.tooLarge
@@ -896,18 +904,30 @@ Item {
 
               Rectangle { width: parent.width; height: 1; color: Util.alpha(Color.foreground, 0.13) }
 
-              ScrollView {
+              Flickable {
+                id: editorScroll
                 width: parent.width
                 height: parent.height - y
                 clip: true
+                contentWidth: editor.width
+                contentHeight: editor.implicitHeight
+                boundsBehavior: Flickable.StopAtBounds
+                interactive: contentHeight > height
+
+                function ensureVisible(rect) {
+                  if (contentY >= rect.y) contentY = rect.y
+                  else if (contentY + height <= rect.y + rect.height) contentY = rect.y + rect.height - height
+                }
 
                 MarkdownEditor {
                   id: editor
-                  width: parent.width
+                  width: editorScroll.width
+                  height: Math.max(editorScroll.height, implicitHeight)
                   enabled: root.selectedNote !== null && !root.selectedNote.trashed && !root.editorTooLarge && root.loadedNoteId === root.selectedId
                   readOnly: root.selectedNote ? !!root.selectedNote.trashed : true
                   selectByMouse: true
                   wrapMode: TextEdit.Wrap
+                  onCursorRectangleChanged: editorScroll.ensureVisible(cursorRectangle)
                   foregroundColor: enabled || readOnly ? Color.foreground : Util.alpha(Color.foreground, 0.38)
                   accentColor: Color.accent
                   font.family: Style.font.family

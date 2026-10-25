@@ -101,17 +101,29 @@ ShellRoot {
 
       Rectangle { width: parent.width; height: 1; color: root.alpha(root.foregroundColor, 0.18) }
 
-      ScrollView {
+      Flickable {
+        id: editorScroll
         width: parent.width
         height: parent.height - y
         clip: true
+        contentWidth: editor.width
+        contentHeight: editor.implicitHeight
+        boundsBehavior: Flickable.StopAtBounds
+        interactive: contentHeight > height
+
+        function ensureVisible(rect) {
+          if (contentY >= rect.y) contentY = rect.y
+          else if (contentY + height <= rect.y + rect.height) contentY = rect.y + rect.height - height
+        }
 
         MarkdownEditor {
           id: editor
-          width: parent.width
+          width: editorScroll.width
+          height: Math.max(editorScroll.height, implicitHeight)
           enabled: !root.loading && !root.tooLarge
           selectByMouse: true
           wrapMode: TextEdit.Wrap
+          onCursorRectangleChanged: editorScroll.ensureVisible(cursorRectangle)
           foregroundColor: root.foregroundColor
           accentColor: root.accentColor
           font.family: "monospace"
